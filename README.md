@@ -2,38 +2,34 @@
 
 # rustclamp-runtime
 
-The planned **Runtime component of RustClamp**, the framework in the
-[`rustclamp`](https://github.com/rustclamp/rustclamp) repository. Runtime is
-intended to provide execution-environment contracts selected by each process.
+Runtime-neutral synchronous task supervision contracts for RustClamp. Tasks
+declare their process, whether they are finite or long-lived, whether they are
+required, and how failures should be recovered. `TaskRuntime` can be driven by
+the deterministic `ManualRuntime` or by the optional Tokio adapter.
 
-This is a companion package, not a standalone framework. It is currently a Phase 0
-scaffold: there are no public contracts yet. This package builds alone
-with Rust 1.96.1 and has no dependencies. Publishing is disabled until licensing,
-registry ownership and the first prototype API have been reviewed.
+The default feature set has no external crate dependencies. Tokio is an
+optional feature; its adapter can own a multithreaded runtime or adopt a caller's
+existing Tokio handle. The adapter runs synchronous tasks on Tokio's blocking pool, supports native
+async tasks with the same recovery policies, and translates Ctrl-C into a
+neutral signal value. Core and the base runtime contract contain no Tokio types
+and require no async API.
 
-Runtime contracts should let each process select the execution model it needs.
-Kernel coordination and runtime execution are separate responsibilities:
+Cancellation is cooperative. It cannot undo committed side effects, and a task
+that ignores cancellation may outlive its join timeout. Panic results are
+reported when unwinding is enabled; panic-abort builds cannot recover them.
+Applications choose failure policy because only they know whether work is
+critical. RestartOnce is deliberately limited to one retry in this proof.
 
-```mermaid
-flowchart LR
-    Projection[Resolved process] --> Needs[Execution requirements]
-    Needs --> Select[Select runtime per process]
-    Select --> Drive[Runtime drives work]
-    Kernel[Kernel coordinates] --> Drive
-    Drive --> Shutdown[Cancellation and bounded shutdown]
-```
+| Mode | External packages | Executor required | Purpose |
+| --- | ---: | --- | --- |
+| Default / ManualRuntime | 0 | No | Deterministic coordination tests |
+| `tokio` feature | Tokio + platform dependencies | Yes | Supervised task and signal adapter |
 
-| Baseline | Current result |
-| --- | --- |
-| External Rust dependencies | 0 |
-| Public runtime contracts | 0 |
-| Executor requirement | None |
-| Runtime measurements | Not applicable until behavior exists |
-
-When a driver is implemented, compare it with equivalent direct Rust under the
-same workload. Record dependencies, build and binary cost, tasks/threads,
-allocations, startup-to-ready time, throughput, and shutdown duration where
-relevant. Missing observations are unavailable, never zero.
+The lifecycle example demonstrates process-specific runtime selection, optional
+feature activation, task supervision, task-stop deadlines, and fake-resource
+startup/shutdown. Its async dependency remains confined to the optional Tokio adapter. The base
+contract is synchronous; native async operations use the adapter's supervision
+path and retain the same cancellation and failure policy.
 
 ```sh
 cargo fmt --all -- --check
@@ -42,7 +38,4 @@ cargo test --offline --locked --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --offline --locked --no-deps --all-features
 ```
 
-For coordinated checkout, architecture checks, measurements, and release policy,
-see the [facade contributor guide](https://github.com/rustclamp/rustclamp/blob/main/CONTRIBUTING.md).
-The configured remote is `https://github.com/rustclamp/runtime.git`; repository existence
-and public visibility were verified during Phase 0.
+For the measured adapter comparison and limitations, see the [Phase 5 evidence](../rustclamp/docs/evidence/phase5-lifecycle.md).

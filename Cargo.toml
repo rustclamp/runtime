@@ -8,6 +8,14 @@ repository = "https://github.com/rustclamp/runtime"
 readme = "README.md"
 publish = false
 
+[features]
+default = []
+tokio = ["dep:tokio"]
+
+[dependencies]
+rustclamp-core = { version = "0.1.0", path = "../core" }
+tokio = { version = "1.53.1", optional = true, default-features = false, features = ["rt-multi-thread", "time", "signal", "macros"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"
