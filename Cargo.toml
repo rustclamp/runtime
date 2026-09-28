@@ -1,0 +1,16 @@
+[package]
+name = "rustclamp-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+description = "Clamp execution-environment contracts, added only when a prototype requires them."
+repository = "https://github.com/rustclamp/runtime"
+readme = "README.md"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
