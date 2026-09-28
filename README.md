@@ -2,9 +2,12 @@
 
 # rustclamp-runtime
 
-Clamp execution-environment contracts, added only when a prototype requires them.
+The planned **Runtime component of RustClamp**, the framework in the
+[`rustclamp`](https://github.com/rustclamp/rustclamp) repository. Runtime is
+intended to provide execution-environment contracts selected by each process.
 
-Phase 0 scaffold. There are no public contracts yet. This package builds alone
+This is a companion package, not a standalone framework. It is currently a Phase 0
+scaffold: there are no public contracts yet. This package builds alone
 with Rust 1.96.1 and has no dependencies. Publishing is disabled until licensing,
 registry ownership and the first prototype API have been reviewed.
 
