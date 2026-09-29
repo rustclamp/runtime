@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.96.1"
 description = "Clamp execution-environment contracts, added only when a prototype requires them."
 repository = "https://github.com/rustclamp/runtime"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 publish = false
 

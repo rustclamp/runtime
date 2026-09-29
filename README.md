@@ -46,3 +46,10 @@ For coordinated checkout, architecture checks, measurements, and release policy,
 see the [facade contributor guide](https://github.com/rustclamp/rustclamp/blob/main/CONTRIBUTING.md).
 The configured remote is `https://github.com/rustclamp/runtime.git`; repository existence
 and public visibility were verified during Phase 0.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option. Unless you state otherwise, any
+contribution you submit for inclusion is dual licensed as above, without
+additional terms or conditions.
