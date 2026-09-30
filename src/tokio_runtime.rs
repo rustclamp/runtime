@@ -15,8 +15,31 @@ use crate::{FailurePolicy, Supervision, TaskContext, TaskDefinition, TaskExit, T
 #[cfg(feature = "signal")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShutdownSignal {
-    /// The process received its interrupt signal.
+    /// The process received its interrupt signal (Ctrl-C / SIGINT).
     Interrupt,
+    /// The process received SIGTERM (Unix only), the usual service-manager stop.
+    Terminate,
+}
+
+/// Completes on the first shutdown request: Ctrl-C/SIGINT, or SIGTERM on Unix.
+///
+/// Call from inside the runtime; handlers are installed on first poll.
+#[cfg(feature = "signal")]
+pub async fn shutdown_signal() -> io::Result<ShutdownSignal> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut terminate = signal(SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result.map(|()| ShutdownSignal::Interrupt),
+            _ = terminate.recv() => Ok(ShutdownSignal::Terminate),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await?;
+        Ok(ShutdownSignal::Interrupt)
+    }
 }
 
 /// Tokio adapter that can own a runtime or adopt an existing runtime handle.
@@ -69,29 +92,27 @@ impl TokioRuntime {
     {
         let task_context = context.clone();
         let join = self.handle.spawn(async move {
-            let mut future = Box::pin(operation(task_context.clone()));
-            loop {
-                if task_context.is_cancelled() {
-                    return TaskExit::Cancelled;
-                }
-                if task_context.is_expired() {
-                    return TaskExit::TimedOut;
-                }
-                tokio::select! {
-                    result = &mut future => return match result {
-                        Ok(()) if task_context.is_cancelled() => TaskExit::Cancelled,
-                        Ok(()) => TaskExit::Completed,
-                        Err(error) => TaskExit::Failed(error),
-                    },
-                    _ = async {
-                        if let Some(deadline) = task_context.deadline() {
-                            tokio::time::sleep_until(deadline.into()).await;
-                        } else {
-                            std::future::pending::<()>().await;
-                        }
-                    } => return TaskExit::TimedOut,
-                    _ = tokio::time::sleep(Duration::from_millis(5)) => {},
-                }
+            if task_context.is_cancelled() {
+                return TaskExit::Cancelled;
+            }
+            if task_context.is_expired() {
+                return TaskExit::TimedOut;
+            }
+            let future = operation(task_context.clone());
+            tokio::select! {
+                result = future => match result {
+                    Ok(()) if task_context.is_cancelled() => TaskExit::Cancelled,
+                    Ok(()) => TaskExit::Completed,
+                    Err(error) => TaskExit::Failed(error),
+                },
+                () = task_context.cancelled() => TaskExit::Cancelled,
+                () = async {
+                    if let Some(deadline) = task_context.deadline() {
+                        tokio::time::sleep_until(deadline.into()).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => TaskExit::TimedOut,
             }
         });
         AsyncTask {

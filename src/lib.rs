@@ -3,28 +3,116 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use std::collections::BTreeMap;
+use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
 use std::sync::{
-    Arc,
+    Arc, Mutex, PoisonError,
     atomic::{AtomicBool, Ordering},
 };
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use rustclamp_core::ProcessId;
 
 /// Cooperative cancellation signal shared with a running task.
+///
+/// Tasks either check [`is_cancelled`](Self::is_cancelled) or await
+/// [`cancelled`](Self::cancelled); the future needs no executor-specific support.
 #[derive(Clone, Debug, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken(Arc<TokenState>);
+
+#[derive(Debug, Default)]
+struct TokenState {
+    cancelled: AtomicBool,
+    waiters: Mutex<Waiters>,
+}
+
+/// Wakers of pending [`Cancelled`] futures, keyed so a dropped future deregisters.
+#[derive(Debug, Default)]
+struct Waiters {
+    next: u64,
+    wakers: BTreeMap<u64, Waker>,
+}
 
 impl CancellationToken {
-    /// Requests cancellation. Tasks must check the token and cooperate.
+    /// Requests cancellation and wakes every task awaiting [`cancelled`](Self::cancelled).
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancelled.store(true, Ordering::Release);
+        let wakers = std::mem::take(&mut self.waiters().wakers);
+        wakers.into_values().for_each(Waker::wake);
     }
 
     /// Reports whether cancellation was requested.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Completes once cancellation is requested.
+    pub fn cancelled(&self) -> Cancelled<'_> {
+        Cancelled {
+            tokens: vec![(self, None)],
+        }
+    }
+
+    fn waiters(&self) -> std::sync::MutexGuard<'_, Waiters> {
+        self.0
+            .waiters
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Future returned by [`CancellationToken::cancelled`] and [`TaskContext::cancelled`].
+///
+/// Completes when any watched token is cancelled. Dropping it deregisters its
+/// wakers, so long-lived parent tokens do not accumulate finished waiters.
+#[derive(Debug)]
+pub struct Cancelled<'a> {
+    tokens: Vec<(&'a CancellationToken, Option<u64>)>,
+}
+
+impl Future for Cancelled<'_> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
+        for (token, key) in &mut self.tokens {
+            if token.is_cancelled() {
+                return Poll::Ready(());
+            }
+            let mut waiters = token.waiters();
+            // cancel() stores the flag before taking the waiters, so re-check under the lock.
+            if token.is_cancelled() {
+                return Poll::Ready(());
+            }
+            match key {
+                Some(key) => {
+                    if let Some(waker) = waiters.wakers.get_mut(key)
+                        && !waker.will_wake(context.waker())
+                    {
+                        waker.clone_from(context.waker());
+                    }
+                }
+                None => {
+                    let next = waiters.next;
+                    waiters.next += 1;
+                    waiters.wakers.insert(next, context.waker().clone());
+                    *key = Some(next);
+                }
+            }
+        }
+        Poll::Pending
+    }
+}
+
+impl Drop for Cancelled<'_> {
+    fn drop(&mut self) {
+        for (token, key) in &self.tokens {
+            if let Some(key) = key {
+                token.waiters().wakers.remove(key);
+            }
+        }
     }
 }
 
@@ -70,6 +158,16 @@ impl TaskContext {
                 .parent_cancellation
                 .iter()
                 .any(CancellationToken::is_cancelled)
+    }
+
+    /// Completes once this task or any parent is cancelled.
+    pub fn cancelled(&self) -> Cancelled<'_> {
+        Cancelled {
+            tokens: std::iter::once(&self.cancellation)
+                .chain(&self.parent_cancellation)
+                .map(|token| (token, None))
+                .collect(),
+        }
     }
 
     /// Returns this task's monotonic deadline, if one exists.

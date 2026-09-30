@@ -2,8 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- `CancellationToken::cancelled` and `TaskContext::cancelled` futures: awaitable,
+  executor-neutral cancellation (own token or any parent). Dropped waiters
+  deregister, so long-lived root tokens do not accumulate wakers.
+- `tokio_runtime::shutdown_signal` (feature `signal`): async, resolves on
+  SIGINT or, on Unix, SIGTERM; new `ShutdownSignal::Terminate`.
+
 ### Changed
 
+- `spawn_async` awaits cancellation instead of polling every 5 ms.
 - Tokio `signal` moved behind a new `signal` feature; `tokio` alone no longer
   pulls `signal-hook-registry`/`errno`. `wait_for_ctrl_c` and `ShutdownSignal`
   require `signal` (ADR 0017).
