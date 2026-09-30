@@ -12,6 +12,11 @@
   Unix, SIGTERM handlers eagerly and returns a future that resolves on the first;
   new `ShutdownSignal::Terminate`.
 
+- `tokio_runtime::reload_signal` / `ReloadSignal` (feature `signal`, Unix): SIGHUP
+  as a repeatable `recv()`, installed eagerly (#4).
+- `tokio_runtime::wait_for_shutdown` (feature `signal`): blocking SIGINT/SIGTERM wait
+  for sync apps (#4).
+
 ### Changed
 
 - `spawn_async` awaits cancellation instead of polling every 5 ms.

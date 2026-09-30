@@ -54,6 +54,39 @@ pub fn shutdown_signal() -> io::Result<impl Future<Output = ShutdownSignal> + Se
     }
 }
 
+/// Blocks the calling thread until SIGINT (Ctrl-C) or, on Unix, SIGTERM.
+///
+/// For synchronous apps that only need to park until told to stop. Call outside
+/// an async runtime context.
+// ponytail: builds a one-thread current-thread runtime for the wait; a runtime-free
+// wait needs `sigwait` (unsafe, forbidden here) or a signal-hook dependency.
+#[cfg(feature = "signal")]
+pub fn wait_for_shutdown() -> io::Result<ShutdownSignal> {
+    let runtime = Builder::new_current_thread().enable_all().build()?;
+    runtime.block_on(async { Ok(shutdown_signal()?.await) })
+}
+
+/// Stream of reload requests (SIGHUP, Unix only), the usual "re-read config" signal.
+#[cfg(all(feature = "signal", unix))]
+pub struct ReloadSignal(tokio::signal::unix::Signal);
+
+#[cfg(all(feature = "signal", unix))]
+impl ReloadSignal {
+    /// Completes on the next SIGHUP; `None` once the signal driver is gone.
+    pub async fn recv(&mut self) -> Option<()> {
+        self.0.recv().await
+    }
+}
+
+/// Installs the SIGHUP handler now: from this call on, SIGHUP is delivered to the
+/// returned [`ReloadSignal`] instead of terminating the process. Call from inside
+/// the runtime.
+#[cfg(all(feature = "signal", unix))]
+pub fn reload_signal() -> io::Result<ReloadSignal> {
+    use tokio::signal::unix::{SignalKind, signal};
+    Ok(ReloadSignal(signal(SignalKind::hangup())?))
+}
+
 /// Tokio adapter that can own a runtime or adopt an existing runtime handle.
 pub struct TokioRuntime {
     handle: Handle,
