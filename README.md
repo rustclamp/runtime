@@ -23,7 +23,8 @@ critical. RestartOnce is deliberately limited to one retry in this proof.
 | Mode | External packages | Executor required | Purpose |
 | --- | ---: | --- | --- |
 | Default / ManualRuntime | 0 | No | Deterministic coordination tests |
-| `tokio` feature | Tokio + platform dependencies | Yes | Supervised task and signal adapter |
+| `tokio` feature | Tokio | Yes | Supervised task adapter |
+| `signal` feature | `tokio` + Tokio `signal` (platform signal crates) | Yes | `TokioRuntime::wait_for_ctrl_c` |
 
 The lifecycle example demonstrates process-specific runtime selection, optional
 feature activation, task supervision, task-stop deadlines, and fake-resource

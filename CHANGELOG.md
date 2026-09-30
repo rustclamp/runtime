@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Tokio `signal` moved behind a new `signal` feature; `tokio` alone no longer
+  pulls `signal-hook-registry`/`errno`. `wait_for_ctrl_c` and `ShutdownSignal`
+  require `signal` (ADR 0017).
+
 ### Added
 
 - Synchronous process-scoped task, cancellation, deadline, and recovery

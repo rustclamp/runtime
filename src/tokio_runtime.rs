@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use crate::{FailurePolicy, Supervision, TaskContext, TaskDefinition, TaskExit, TaskRuntime};
 
 /// Platform signal translated into a runtime-neutral shutdown request.
+#[cfg(feature = "signal")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShutdownSignal {
     /// The process received its interrupt signal.
@@ -47,6 +48,7 @@ impl TokioRuntime {
     }
 
     /// Blocks until Ctrl-C and returns a platform-neutral signal value.
+    #[cfg(feature = "signal")]
     pub fn wait_for_ctrl_c(&self) -> io::Result<ShutdownSignal> {
         self.handle.block_on(async {
             tokio::signal::ctrl_c().await?;
