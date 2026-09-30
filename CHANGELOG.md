@@ -4,6 +4,10 @@
 
 ### Added
 
+- `app::AppRunner` (feature `tokio`): drives the core `Initialize/Start/Ready/Drain/Stop`
+  traits (via `app::Part`) plus long-lived services under one shutdown token, with a
+  drain timeout and unwinding on startup failure; `run()` (feature `signal`) joins
+  SIGINT/SIGTERM; reload is a service around `reload_signal()`. Proposed in ADR 0022.
 - `TokioRuntime::managed_with_threads(NonZeroUsize)`; `managed()` keeps two workers.
 - `CancellationToken::cancelled` and `TaskContext::cancelled` futures: awaitable,
   executor-neutral cancellation (own token or any parent). Dropped waiters

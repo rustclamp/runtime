@@ -475,4 +475,6 @@ impl<R: TaskRuntime> RunningTask<'_, R> {
 }
 
 #[cfg(feature = "tokio")]
+pub mod app;
+#[cfg(feature = "tokio")]
 pub mod tokio_runtime;
