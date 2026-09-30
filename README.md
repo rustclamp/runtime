@@ -1,36 +1,72 @@
-<img src="https://raw.githubusercontent.com/rustclamp/docs.rustclamp.com/main/assets/rustclamp-logo.png" alt="RustClamp logo" width="160">
+<img src="https://docs.rustclamp.com/assets/rustclamp-logo.png" alt="RustClamp logo" width="160">
 
 # rustclamp-runtime
 
-Runtime-neutral synchronous task supervision contracts for RustClamp. Tasks
-declare their process, whether they are finite or long-lived, whether they are
-required, and how failures should be recovered. `TaskRuntime` can be driven by
-the deterministic `ManualRuntime` or by the optional Tokio adapter.
+Runtime component of [RustClamp](https://github.com/rustclamp/rustclamp):
+synchronous task supervision and application lifecycle, with an optional Tokio
+adapter. Base contracts contain no Tokio types and need no `async`. Companion
+crate, not a standalone framework.
 
-The default feature set has no external crate dependencies. Tokio is an
-optional feature; its adapter can own a multithreaded runtime or adopt a caller's
-existing Tokio handle. The adapter runs synchronous tasks on Tokio's blocking pool, supports native
-async tasks with the same recovery policies, and translates Ctrl-C into a
-neutral signal value. Core and the base runtime contract contain no Tokio types
-and require no async API.
+## Install
 
-Cancellation is cooperative. It cannot undo committed side effects, and a task
-that ignores cancellation may outlive its join timeout. Panic results are
-reported when unwinding is enabled; panic-abort builds cannot recover them.
-Applications choose failure policy because only they know whether work is
-critical. RestartOnce is deliberately limited to one retry in this proof.
+Not published to crates.io yet (`publish = false`). Depend on it from git, Rust 1.96.1+:
 
-| Mode | External packages | Executor required | Purpose |
-| --- | ---: | --- | --- |
-| Default / ManualRuntime | 0 | No | Deterministic coordination tests |
-| `tokio` feature | Tokio | Yes | Supervised task adapter |
-| `signal` feature | `tokio` + Tokio `signal` (platform signal crates) | Yes | `TokioRuntime::wait_for_ctrl_c` |
+```toml
+[dependencies]
+rustclamp-runtime = { git = "https://github.com/rustclamp/runtime" }
+```
 
-The lifecycle example demonstrates process-specific runtime selection, optional
-feature activation, task supervision, task-stop deadlines, and fake-resource
-startup/shutdown. Its async dependency remains confined to the optional Tokio adapter. The base
-contract is synchronous; native async operations use the adapter's supervision
-path and retain the same cancellation and failure policy.
+Enable features as needed: `features = ["tokio"]` or `["signal"]`.
+
+## Example
+
+```rust
+use rustclamp_runtime::app::AppRunner;
+use std::time::Duration;
+
+// application/process ids come from rustclamp-core
+let runner = AppRunner::new(application, process)
+    .drain_timeout(Duration::from_secs(10))
+    .service("worker", |shutdown| async move {
+        shutdown.cancelled().await; // run until asked to stop
+        Ok(())
+    });
+runner.run().await?; // returns on SIGINT/SIGTERM (feature `signal`)
+```
+
+## Main API
+
+- **Supervision (no features):** `Supervisor`, `TaskDefinition`, `TaskKind`,
+  `FailurePolicy`, `Supervision`, `TaskExit`, `TaskRuntime`, the deterministic
+  `ManualRuntime`, and cooperative `CancellationToken` / `TaskContext`
+  (awaitable `cancelled`).
+- **`app::AppRunner` (`tokio`):** runs Core's `Initialize`/`Start`/`Ready`/`Drain`/`Stop`
+  parts (`Part`) and long-lived services under one shutdown token, with a drain
+  timeout and unwinding on startup failure. `run` (`signal`) joins SIGINT/SIGTERM;
+  `run_until` takes any shutdown future.
+- **`tokio_runtime::TokioRuntime` (`tokio`):** `managed()` (two workers),
+  `managed_with_threads(NonZeroUsize)`, or adopt an existing handle; sync tasks
+  run on the blocking pool, async tasks share the same recovery policies.
+- **Signals (`signal`):** `shutdown_signal`, `wait_for_shutdown` (blocking, for sync
+  apps), `TokioRuntime::wait_for_ctrl_c`, and `reload_signal` / `ReloadSignal`
+  (SIGHUP, Unix).
+
+Cancellation is cooperative: it cannot undo committed side effects, and a task
+that ignores it may outlive its join timeout.
+
+| Feature | Adds |
+| --- | --- |
+| default | nothing (0 external dependencies) |
+| `tokio` | Tokio adapter, `AppRunner` |
+| `signal` | `tokio` + Tokio signal handling |
+
+See [CHANGELOG.md](CHANGELOG.md).
+
+## Documentation
+
+<https://docs.rustclamp.com>
+
+## Development
 
 ```sh
 cargo fmt --all -- --check
@@ -39,11 +75,8 @@ cargo test --offline --locked --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --offline --locked --no-deps --all-features
 ```
 
-
-For coordinated checkout, architecture checks, measurements, and release policy,
-see the [facade contributor guide](https://github.com/rustclamp/rustclamp/blob/main/CONTRIBUTING.md).
-The configured remote is `https://github.com/rustclamp/runtime.git`; repository existence
-and public visibility were verified during Phase 0.
+Coordinated checkout, architecture checks and release policy: see the
+[facade contributor guide](https://github.com/rustclamp/rustclamp/blob/main/CONTRIBUTING.md).
 
 ## License
 
@@ -51,4 +84,3 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT) at your option. Unless you state otherwise, any
 contribution you submit for inclusion is dual licensed as above, without
 additional terms or conditions.
-
