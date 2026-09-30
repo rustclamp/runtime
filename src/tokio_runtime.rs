@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::io;
+use std::num::NonZeroUsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -60,10 +61,18 @@ pub struct TokioRuntime {
 }
 
 impl TokioRuntime {
-    /// Builds and owns a multithreaded Tokio runtime.
+    /// Builds and owns a multithreaded Tokio runtime with two worker threads.
+    ///
+    /// Use [`managed_with_threads`](Self::managed_with_threads) to size it for the host.
     pub fn managed() -> io::Result<Self> {
+        Self::managed_with_threads(NonZeroUsize::new(2).expect("2 is non-zero"))
+    }
+
+    /// Builds and owns a multithreaded Tokio runtime with `threads` worker threads,
+    /// e.g. `std::thread::available_parallelism()?` for a CPU-bound service.
+    pub fn managed_with_threads(threads: NonZeroUsize) -> io::Result<Self> {
         let runtime = Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(threads.get())
             .enable_all()
             .build()?;
         let handle = runtime.handle().clone();

@@ -176,3 +176,16 @@ fn native_async_supervisor_retries_and_applies_required_failure_policy() {
         Supervision::Shutdown(TaskExit::Failed("required failure".to_owned()))
     );
 }
+
+#[test]
+fn managed_runtimes_have_the_requested_worker_count() {
+    let workers = |runtime: TokioRuntime| {
+        runtime.block_on(async { tokio::runtime::Handle::current().metrics().num_workers() })
+    };
+    assert_eq!(workers(TokioRuntime::managed().unwrap()), 2);
+    let four = std::num::NonZeroUsize::new(4).unwrap();
+    assert_eq!(
+        workers(TokioRuntime::managed_with_threads(four).unwrap()),
+        4
+    );
+}

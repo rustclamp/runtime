@@ -4,6 +4,7 @@
 
 ### Added
 
+- `TokioRuntime::managed_with_threads(NonZeroUsize)`; `managed()` keeps two workers.
 - `CancellationToken::cancelled` and `TaskContext::cancelled` futures: awaitable,
   executor-neutral cancellation (own token or any parent). Dropped waiters
   deregister, so long-lived root tokens do not accumulate wakers.
