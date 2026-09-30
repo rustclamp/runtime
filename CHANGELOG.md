@@ -7,8 +7,9 @@
 - `CancellationToken::cancelled` and `TaskContext::cancelled` futures: awaitable,
   executor-neutral cancellation (own token or any parent). Dropped waiters
   deregister, so long-lived root tokens do not accumulate wakers.
-- `tokio_runtime::shutdown_signal` (feature `signal`): async, resolves on
-  SIGINT or, on Unix, SIGTERM; new `ShutdownSignal::Terminate`.
+- `tokio_runtime::shutdown_signal` (feature `signal`): installs SIGINT and, on
+  Unix, SIGTERM handlers eagerly and returns a future that resolves on the first;
+  new `ShutdownSignal::Terminate`.
 
 ### Changed
 

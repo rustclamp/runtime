@@ -102,8 +102,8 @@ fn sigterm_resolves_the_shutdown_signal() {
 
     let runtime = TokioRuntime::managed().unwrap();
     let signal = runtime.block_on(async {
-        let waiting = tokio::spawn(shutdown_signal());
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Installed eagerly: the signal below is caught even though nothing polled yet.
+        let waiting = tokio::spawn(shutdown_signal().unwrap());
         let status = std::process::Command::new("kill")
             .args(["-TERM", &std::process::id().to_string()])
             .status()
@@ -111,5 +111,5 @@ fn sigterm_resolves_the_shutdown_signal() {
         assert!(status.success());
         tokio::time::timeout(Duration::from_secs(5), waiting).await
     });
-    assert_eq!(signal.unwrap().unwrap().unwrap(), ShutdownSignal::Terminate);
+    assert_eq!(signal.unwrap().unwrap(), ShutdownSignal::Terminate);
 }

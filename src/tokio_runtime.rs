@@ -21,24 +21,35 @@ pub enum ShutdownSignal {
     Terminate,
 }
 
-/// Completes on the first shutdown request: Ctrl-C/SIGINT, or SIGTERM on Unix.
+/// Installs shutdown handlers now and returns a future that completes on the
+/// first request: SIGINT (Ctrl-C), or SIGTERM on Unix.
 ///
-/// Call from inside the runtime; handlers are installed on first poll.
+/// Call from inside the runtime, before startup work: from this call on, those
+/// signals are delivered to the future instead of terminating the process.
+/// Off Unix, Ctrl-C is registered when the future is first polled.
 #[cfg(feature = "signal")]
-pub async fn shutdown_signal() -> io::Result<ShutdownSignal> {
+pub fn shutdown_signal() -> io::Result<impl Future<Output = ShutdownSignal> + Send + 'static> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
+        let mut interrupt = signal(SignalKind::interrupt())?;
         let mut terminate = signal(SignalKind::terminate())?;
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => result.map(|()| ShutdownSignal::Interrupt),
-            _ = terminate.recv() => Ok(ShutdownSignal::Terminate),
-        }
+        Ok(async move {
+            tokio::select! {
+                _ = interrupt.recv() => ShutdownSignal::Interrupt,
+                _ = terminate.recv() => ShutdownSignal::Terminate,
+            }
+        })
     }
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c().await?;
-        Ok(ShutdownSignal::Interrupt)
+        Ok(async {
+            // ponytail: a ctrl_c registration error off Unix is treated as "never signalled".
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => ShutdownSignal::Interrupt,
+                Err(_) => std::future::pending().await,
+            }
+        })
     }
 }
 
