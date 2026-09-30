@@ -9,7 +9,7 @@ use rustclamp_core::{
     ApplicationId, Drain, Initialize, LifecycleContext, Module, ModuleId, ProcessId, Ready, Start,
     Stop,
 };
-use rustclamp_runtime::app::{AppRunner, Failure, Part, Phase};
+use rustclamp_runtime::app::{AppRunner, Part, Phase, RunError};
 
 const APP: ApplicationId = ApplicationId::new("runtime.test.app");
 const PROCESS: ProcessId = ProcessId::new("runtime.test.app.process");
@@ -30,6 +30,9 @@ macro_rules! probe {
         impl $name {
             fn step(&self, phase: &'static str) -> Result<(), String> {
                 self.log.lock().unwrap().push(format!("{}.{phase}", $id));
+                if self.fail_at.and_then(|at| at.strip_prefix('!')) == Some(phase) {
+                    panic!("{phase} panicked");
+                }
                 if self.fail_at == Some(phase) {
                     Err(format!("{phase} broke"))
                 } else {
@@ -103,6 +106,24 @@ fn runner(log: &Log, users_fail_at: Option<&'static str>) -> AppRunner {
         }))
 }
 
+/// Failures as comparable `(phase, name, message)` triples.
+fn flat(error: &RunError) -> Vec<(Phase, &'static str, &str)> {
+    error
+        .failures
+        .iter()
+        .map(|f| (f.phase, f.name, f.message.as_str()))
+        .collect()
+}
+
+/// Logs `svc.dropped` when the service future (and everything it holds) is dropped.
+struct DropGuard(Log);
+
+impl Drop for DropGuard {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().push("svc.dropped".into());
+    }
+}
+
 fn entries(log: &Log) -> Vec<String> {
     log.lock().unwrap().clone()
 }
@@ -156,14 +177,7 @@ async fn start_failure_stops_initialized_parts_without_running_services() {
         .await
         .unwrap_err();
 
-    assert_eq!(
-        error.failures,
-        [Failure {
-            phase: Phase::Start,
-            name: "users",
-            message: "start broke".into()
-        }]
-    );
+    assert_eq!(flat(&error), [(Phase::Start, "users", "start broke")]);
     assert_eq!(
         entries(&log),
         [
@@ -207,17 +221,26 @@ async fn stop_failure_is_reported_and_does_not_skip_earlier_parts() {
 #[tokio::test]
 async fn service_that_ignores_shutdown_is_aborted_after_drain_timeout() {
     let log = Log::default();
+    let guard = DropGuard(log.clone());
     let result = runner(&log, None)
         .drain_timeout(Duration::from_millis(50))
-        .service("stuck", |_| std::future::pending())
+        .service("stuck", move |_| async move {
+            let _guard = guard;
+            std::future::pending().await
+        })
         .run_until(std::future::ready(()))
         .await;
 
-    let failures = result.unwrap_err().failures;
-    assert_eq!(failures.len(), 1);
-    assert_eq!(failures[0].phase, Phase::Drain);
-    // Parts still drain and stop after the timeout.
-    assert_eq!(entries(&log).last().unwrap(), "db.stop");
+    let error = result.unwrap_err();
+    assert_eq!(error.failures.len(), 1);
+    assert_eq!(error.failures[0].phase, Phase::Drain);
+    assert_eq!(error.failures[0].name, "stuck");
+    // The aborted service releases its handles before any part stops.
+    let log = entries(&log);
+    let dropped = log.iter().position(|e| e == "svc.dropped").unwrap();
+    let stopped = log.iter().position(|e| e == "users.stop").unwrap();
+    assert!(dropped < stopped, "{log:?}");
+    assert_eq!(log.last().unwrap(), "db.stop");
 }
 
 #[tokio::test]
@@ -250,13 +273,81 @@ async fn failing_service_shuts_down_the_rest_and_is_reported() {
         .await
         .unwrap_err();
 
+    assert_eq!(flat(&error), [(Phase::Service, "boom", "crashed")]);
+    assert_eq!(entries(&log).last().unwrap(), "db.stop");
+}
+
+#[tokio::test]
+async fn ready_failure_unwinds_without_draining() {
+    let log = Log::default();
+    let error = runner(&log, Some("ready"))
+        .run_until(std::future::pending())
+        .await
+        .unwrap_err();
+
+    assert_eq!(flat(&error), [(Phase::Ready, "users", "ready broke")]);
+    let log = entries(&log);
+    assert!(!log.iter().any(|e| e.ends_with(".drain")), "{log:?}");
+    assert_eq!(&log[log.len() - 2..], ["users.stop", "db.stop"]);
+}
+
+#[tokio::test]
+async fn panicking_hook_is_a_failure_and_stops_still_run() {
+    let log = Log::default();
+    let error = runner(&log, Some("!start"))
+        .run_until(std::future::pending())
+        .await
+        .unwrap_err();
+
     assert_eq!(
-        error.failures,
-        [Failure {
-            phase: Phase::Service,
-            name: "boom",
-            message: "crashed".into()
-        }]
+        flat(&error),
+        [(Phase::Start, "users", "panicked: start panicked")]
+    );
+    assert_eq!(&entries(&log)[4..], ["users.stop", "db.stop"]);
+}
+
+#[tokio::test]
+async fn panicking_service_is_reported_by_name() {
+    let log = Log::default();
+    let error = runner(&log, None)
+        .service("crasher", |_| async { panic!("service blew up") })
+        .run_until(std::future::pending())
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.failures.len(), 1);
+    assert_eq!(error.failures[0].phase, Phase::Service);
+    assert_eq!(error.failures[0].name, "crasher");
+    assert_eq!(entries(&log).last().unwrap(), "db.stop");
+}
+
+#[tokio::test]
+async fn clean_early_exit_is_an_unexpected_exit() {
+    let log = Log::default();
+    let error = runner(&log, None)
+        .service("quitter", |_| async { Ok(()) })
+        .run_until(std::future::pending())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        flat(&error),
+        [(Phase::Service, "quitter", "unexpected exit")]
     );
     assert_eq!(entries(&log).last().unwrap(), "db.stop");
+}
+
+#[tokio::test]
+async fn failing_drain_is_reported_and_stop_still_runs() {
+    let log = Log::default();
+    let error = runner(&log, Some("drain"))
+        .run_until(std::future::ready(()))
+        .await
+        .unwrap_err();
+
+    assert_eq!(flat(&error), [(Phase::Drain, "users", "drain broke")]);
+    assert_eq!(
+        &entries(&log)[6..],
+        ["users.drain", "db.drain", "users.stop", "db.stop"]
+    );
 }

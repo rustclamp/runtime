@@ -1,9 +1,11 @@
 //! App runner: drives core lifecycle participants and long-lived services
 //! under one shutdown token. See ADR 0022.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -16,6 +18,7 @@ use crate::CancellationToken;
 
 /// Lifecycle phase in which a [`Failure`] happened.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Phase {
     /// [`Initialize::initialize`].
     Initialize,
@@ -33,6 +36,7 @@ pub enum Phase {
 
 /// One failed phase of one participant or service.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct Failure {
     /// The phase that failed.
     pub phase: Phase,
@@ -44,6 +48,7 @@ pub struct Failure {
 
 /// Everything that went wrong in one run, in the order it happened.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct RunError {
     /// Failures in occurrence order; never empty.
     pub failures: Vec<Failure>,
@@ -66,6 +71,20 @@ impl fmt::Display for RunError {
 }
 
 impl Error for RunError {}
+
+/// Calls a hook, turning a panic into an error so the unwinding sequence still runs.
+fn call(hook: &mut Hook, context: &LifecycleContext) -> Result<(), String> {
+    catch_unwind(AssertUnwindSafe(|| hook(context))).unwrap_or_else(|payload| {
+        let text = payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned());
+        Err(format!("panicked: {}", text.unwrap_or_default()))
+    })
+}
+
+/// How long an aborted service gets to drop its handles before parts stop.
+const ABORT_GRACE: Duration = Duration::from_secs(1);
 
 type Select = fn(&mut Hooks) -> &mut Option<Hook>;
 type Hook = Box<dyn FnMut(&LifecycleContext) -> Result<(), String> + Send>;
@@ -151,8 +170,6 @@ pub struct AppRunner {
     drain_timeout: Duration,
     parts: Vec<Registered>,
     services: Vec<Service>,
-    #[cfg(all(feature = "signal", unix))]
-    on_reload: Option<Box<dyn FnMut() + Send>>,
 }
 
 impl AppRunner {
@@ -164,8 +181,6 @@ impl AppRunner {
             drain_timeout: Duration::from_secs(30),
             parts: Vec::new(),
             services: Vec::new(),
-            #[cfg(all(feature = "signal", unix))]
-            on_reload: None,
         }
     }
 
@@ -203,45 +218,23 @@ impl AppRunner {
         self
     }
 
-    /// Calls `hook` on every SIGHUP while running (Unix, feature `signal`).
-    #[cfg(all(feature = "signal", unix))]
-    #[must_use]
-    pub fn on_reload(mut self, hook: impl FnMut() + Send + 'static) -> Self {
-        self.on_reload = Some(Box::new(hook));
-        self
-    }
-
-    /// Runs until SIGINT/SIGTERM (or the shutdown token), reloading on SIGHUP.
-    /// Installs the signal handlers before any startup work.
+    /// Runs until SIGINT/SIGTERM (or the shutdown token). Installs those handlers
+    /// before any startup work.
+    ///
+    /// Reload is not built in: call [`reload_signal`](crate::tokio_runtime::reload_signal)
+    /// before `run()`, and move the stream into a [`service`](Self::service) that
+    /// selects on `recv()` and `token.cancelled()`.
     #[cfg(feature = "signal")]
-    pub async fn run(mut self) -> Result<(), RunError> {
-        let install = |error: std::io::Error| RunError {
+    pub async fn run(self) -> Result<(), RunError> {
+        let shutdown = crate::tokio_runtime::shutdown_signal().map_err(|error| RunError {
             failures: vec![Failure {
                 phase: Phase::Start,
                 name: "signal",
                 message: error.to_string(),
             }],
-        };
-        let shutdown = crate::tokio_runtime::shutdown_signal().map_err(install)?;
-        #[cfg(unix)]
-        let mut reload = crate::tokio_runtime::reload_signal().map_err(install)?;
-        let mut on_reload = self.on_reload.take();
-        let reloads = async move {
-            #[cfg(unix)]
-            while reload.recv().await.is_some() {
-                if let Some(hook) = on_reload.as_mut() {
-                    hook();
-                }
-            }
-            #[cfg(not(unix))]
-            let _ = &mut on_reload;
-            std::future::pending::<()>().await;
-        };
+        })?;
         self.run_until(async move {
-            tokio::select! {
-                _ = shutdown => {},
-                () = reloads => {},
-            }
+            shutdown.await;
         })
         .await
     }
@@ -268,7 +261,7 @@ impl AppRunner {
         'startup: for (phase, select) in phases {
             for (index, part) in parts.iter_mut().enumerate() {
                 if let Some(run) = select(&mut part.hooks)
-                    && let Err(message) = run(&context)
+                    && let Err(message) = call(run, &context)
                 {
                     failures.push(Failure {
                         phase,
@@ -288,15 +281,16 @@ impl AppRunner {
         }
 
         let mut running = JoinSet::new();
+        let mut names = HashMap::new();
         for service in services {
-            let (name, run) = (service.name, (service.run)(token.clone()));
-            running.spawn(async move { (name, run.await) });
+            let handle = running.spawn((service.run)(token.clone()));
+            names.insert(handle.id(), service.name);
         }
         // Any service leaving early (even Ok) ends the app: services are long-lived.
         let early = tokio::select! {
             () = shutdown => None,
             () = token.cancelled() => None,
-            done = running.join_next(), if !running.is_empty() => done,
+            done = running.join_next_with_id(), if !running.is_empty() => done,
         };
         if let Some(done) = early {
             // A service that exited because the token was cancelled is a clean stop.
@@ -305,28 +299,46 @@ impl AppRunner {
             } else {
                 Phase::Service
             };
-            record_exit(done, phase, "unexpected exit", &mut failures);
+            record_exit(done, &mut names, phase, &mut failures);
         }
 
         // Shutdown: close admission (services), then drain and stop parts in reverse.
         token.cancel();
         let joined = tokio::time::timeout(drain_timeout, async {
-            while let Some(done) = running.join_next().await {
-                record_exit(done, Phase::Drain, "", &mut failures);
+            while let Some(done) = running.join_next_with_id().await {
+                record_exit(done, &mut names, Phase::Drain, &mut failures);
             }
         })
         .await;
         if joined.is_err() {
+            for name in names.values() {
+                failures.push(Failure {
+                    phase: Phase::Drain,
+                    name,
+                    message: format!("still running after {drain_timeout:?}; aborted"),
+                });
+            }
+            // Parts must not stop while an aborted service still holds their handles,
+            // so wait (briefly) for the abort to land.
             running.abort_all();
-            failures.push(Failure {
-                phase: Phase::Drain,
-                name: "services",
-                message: format!("still running after {drain_timeout:?}; aborted"),
-            });
+            let _ = tokio::time::timeout(ABORT_GRACE, async {
+                while let Some(done) = running.join_next_with_id().await {
+                    record_exit(done, &mut names, Phase::Drain, &mut failures);
+                }
+            })
+            .await;
+            // A task that never yields cannot be aborted.
+            for name in names.values() {
+                failures.push(Failure {
+                    phase: Phase::Drain,
+                    name,
+                    message: format!("did not stop within {ABORT_GRACE:?} of abort"),
+                });
+            }
         }
         for part in parts.iter_mut().rev() {
             if let Some(hook) = part.hooks.drain.as_mut()
-                && let Err(message) = hook(&context)
+                && let Err(message) = call(hook, &context)
             {
                 failures.push(Failure {
                     phase: Phase::Drain,
@@ -348,7 +360,7 @@ impl AppRunner {
 fn stop_parts(parts: &mut [Registered], context: &LifecycleContext, failures: &mut Vec<Failure>) {
     for part in parts.iter_mut().rev() {
         if let Some(hook) = part.hooks.stop.as_mut()
-            && let Err(message) = hook(context)
+            && let Err(message) = call(hook, context)
         {
             failures.push(Failure {
                 phase: Phase::Stop,
@@ -359,21 +371,24 @@ fn stop_parts(parts: &mut [Registered], context: &LifecycleContext, failures: &m
     }
 }
 
-/// Records a finished service. `Ok` counts as a failure only for an early exit
-/// (`ok_message` names it); during drain a clean `Ok` is the expected result.
+/// Records a finished service and removes it from `names`. `Ok` counts as a
+/// failure only for an early exit (`Phase::Service`); during drain a clean `Ok`
+/// is the expected result, and an abort is already reported.
 fn record_exit(
-    done: Result<(&'static str, Result<(), String>), tokio::task::JoinError>,
+    done: Result<(tokio::task::Id, Result<(), String>), tokio::task::JoinError>,
+    names: &mut HashMap<tokio::task::Id, &'static str>,
     phase: Phase,
-    ok_message: &str,
     failures: &mut Vec<Failure>,
 ) {
-    let failure = match done {
-        Ok((name, Err(message))) => Some((name, message)),
-        Ok((name, Ok(()))) if phase == Phase::Service => Some((name, ok_message.to_owned())),
-        Ok(_) => None,
-        Err(error) => Some(("service", error.to_string())),
+    let (id, failure) = match done {
+        Ok((id, Err(message))) => (id, Some(message)),
+        Ok((id, Ok(()))) if phase == Phase::Service => (id, Some("unexpected exit".to_owned())),
+        Ok((id, Ok(()))) => (id, None),
+        Err(error) if error.is_cancelled() => (error.id(), None),
+        Err(error) => (error.id(), Some(error.to_string())),
     };
-    if let Some((name, message)) = failure {
+    let name = names.remove(&id).unwrap_or("service");
+    if let Some(message) = failure {
         failures.push(Failure {
             phase,
             name,
