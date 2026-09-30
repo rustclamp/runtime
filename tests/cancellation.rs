@@ -113,3 +113,47 @@ fn sigterm_resolves_the_shutdown_signal() {
     });
     assert_eq!(signal.unwrap().unwrap(), ShutdownSignal::Terminate);
 }
+
+#[cfg(all(feature = "signal", unix))]
+fn kill(signal: &str) {
+    let status = std::process::Command::new("kill")
+        .args([signal, &std::process::id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[cfg(all(feature = "signal", unix))]
+#[test]
+fn sighup_resolves_the_reload_signal_more_than_once() {
+    use std::time::Duration;
+
+    use rustclamp_runtime::tokio_runtime::{TokioRuntime, reload_signal};
+
+    let runtime = TokioRuntime::managed().unwrap();
+    let got = runtime.block_on(async {
+        let mut reload = reload_signal().unwrap();
+        let mut got = 0;
+        for _ in 0..2 {
+            kill("-HUP");
+            let next = tokio::time::timeout(Duration::from_secs(5), reload.recv()).await;
+            got += usize::from(next == Ok(Some(())));
+        }
+        got
+    });
+    assert_eq!(got, 2);
+}
+
+#[cfg(all(feature = "signal", unix))]
+#[test]
+fn sync_wait_returns_on_sigterm() {
+    use rustclamp_runtime::tokio_runtime::{ShutdownSignal, wait_for_shutdown};
+
+    // Handlers exist only once wait_for_shutdown installs them; send after a delay.
+    let sender = std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        kill("-TERM");
+    });
+    assert_eq!(wait_for_shutdown().unwrap(), ShutdownSignal::Terminate);
+    sender.join().unwrap();
+}
