@@ -23,6 +23,9 @@
 
 ### Changed
 
+- Ready for crates.io: `publish = false` is gone and the manifest carries
+  homepage, documentation, keywords and categories. Nothing is uploaded until
+  rustclamp's `tools/publish.py --execute` runs.
 - `spawn_async` awaits cancellation instead of polling every 5 ms.
 - Tokio `signal` moved behind a new `signal` feature; `tokio` alone no longer
   pulls `signal-hook-registry`/`errno`. `wait_for_ctrl_c` and `ShutdownSignal`

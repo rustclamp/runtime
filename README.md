@@ -9,7 +9,7 @@ crate, not a standalone framework.
 
 ## Install
 
-Not published to crates.io yet (`publish = false`). Depend on it from git, Rust 1.96.1+:
+Not on crates.io yet: the name is reserved and 0.1.0 is prepared. Depend on it from git, Rust 1.96.1+:
 
 ```toml
 [dependencies]
