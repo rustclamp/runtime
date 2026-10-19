@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-10-19
+
 ### Added
 
 - `app::AppRunner` (feature `tokio`): drives the core `Initialize/Start/Ready/Drain/Stop`
