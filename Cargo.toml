@@ -1,9 +1,9 @@
 [package]
 name = "rustclamp-runtime"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.96.1"
-description = "Clamp execution-environment contracts, added only when a prototype requires them."
+description = "Task supervision and application lifecycle for RustClamp, with an optional Tokio adapter."
 repository = "https://github.com/rustclamp/runtime"
 license = "MIT OR Apache-2.0"
 homepage = "https://rustclamp.com"
@@ -18,7 +18,7 @@ tokio = ["dep:tokio"]
 signal = ["tokio", "tokio/signal"]
 
 [dependencies]
-rustclamp-core = { version = "0.1.0", path = "../core" }
+rustclamp-core = { version = "1.0.0", path = "../core" }
 tokio = { version = "1.53.1", optional = true, default-features = false, features = ["rt-multi-thread", "time", "macros"] }
 
 [lints.rust]
