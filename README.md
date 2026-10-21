@@ -43,7 +43,8 @@ runner.run().await?; // returns on SIGINT/SIGTERM (feature `signal`)
 - **`app::AppRunner` (`tokio`):** runs Core's `Initialize`/`Start`/`Ready`/`Drain`/`Stop`
   parts (`Part`) and long-lived services under one shutdown token, with a drain
   timeout and unwinding on startup failure. `run` (`signal`) joins SIGINT/SIGTERM;
-  `run_until` takes any shutdown future.
+  `run_until` takes any shutdown future. `readiness()` is a `watch::Receiver<bool>`, `true`
+  between the `ready` phase and the start of shutdown, for a readiness probe.
 - **`tokio_runtime::TokioRuntime` (`tokio`):** `managed()` (two workers),
   `managed_with_threads(NonZeroUsize)`, or adopt an existing handle; sync tasks
   run on the blocking pool, async tasks share the same recovery policies.

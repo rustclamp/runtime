@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- `AppRunner::readiness()`: a `tokio::sync::watch::Receiver<bool>` that is `true`
+  from the end of the `ready` phase until shutdown begins, for readiness probes
+  such as `rustclamp_http::Health`. Enables tokio's `sync` feature (no new crates).
+
 ## 1.0.0 - 2026-10-19
 
 ### Added
