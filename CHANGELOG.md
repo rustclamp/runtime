@@ -7,6 +7,12 @@
 - `AppRunner::readiness()`: a `tokio::sync::watch::Receiver<bool>` that is `true`
   from the end of the `ready` phase until shutdown begins, for readiness probes
   such as `rustclamp_http::Health`. Enables tokio's `sync` feature (no new crates).
+- `config` module (feature `config`): `Config::new(prefix).load::<T>()` builds any
+  `serde::Deserialize` type from the process environment over `.env`, with `__`
+  nesting (`APP__DB__URL`). One `ConfigError` lists every missing, invalid or
+  unknown key; messages never include values. `Secret<T>` redacts `Debug` and
+  `Display` and is read with `expose()`. Feature `config-toml` adds
+  `Config::toml_file` as the lowest layer (#13).
 
 ## 1.0.0 - 2026-10-19
 
