@@ -167,6 +167,7 @@ struct Service {
 pub struct AppRunner {
     context: LifecycleContext,
     token: CancellationToken,
+    ready: tokio::sync::watch::Sender<bool>,
     drain_timeout: Duration,
     parts: Vec<Registered>,
     services: Vec<Service>,
@@ -178,6 +179,7 @@ impl AppRunner {
         Self {
             context: LifecycleContext::new(application, process),
             token: CancellationToken::default(),
+            ready: tokio::sync::watch::Sender::new(false),
             drain_timeout: Duration::from_secs(30),
             parts: Vec::new(),
             services: Vec::new(),
@@ -194,6 +196,17 @@ impl AppRunner {
     /// Returns the shutdown token; cancelling it stops the app like a signal would.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.token.clone()
+    }
+
+    /// Returns the app's readiness: `false` until every part is ready, `true`
+    /// while services run, and `false` again as soon as the runner sees
+    /// shutdown (before it cancels the token, joins services and drains parts).
+    /// A readiness probe such as `rustclamp_http::Health` takes it as is.
+    ///
+    /// ponytail: cancelling the token directly flips it a moment after services
+    /// see the cancellation; a signal or the `run_until` future flips it first.
+    pub fn readiness(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.ready.subscribe()
     }
 
     /// Adds a participant. Registration order is start order; stop order is reversed.
@@ -244,6 +257,7 @@ impl AppRunner {
         let Self {
             context,
             token,
+            ready,
             drain_timeout,
             mut parts,
             services,
@@ -280,6 +294,7 @@ impl AppRunner {
             return Err(RunError { failures });
         }
 
+        ready.send_replace(true);
         let mut running = JoinSet::new();
         let mut names = HashMap::new();
         for service in services {
@@ -303,6 +318,7 @@ impl AppRunner {
         }
 
         // Shutdown: close admission (services), then drain and stop parts in reverse.
+        ready.send_replace(false);
         token.cancel();
         let joined = tokio::time::timeout(drain_timeout, async {
             while let Some(done) = running.join_next_with_id().await {

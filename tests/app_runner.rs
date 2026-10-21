@@ -351,3 +351,36 @@ async fn failing_drain_is_reported_and_stop_still_runs() {
         ["users.drain", "db.drain", "users.stop", "db.stop"]
     );
 }
+
+#[tokio::test]
+async fn readiness_is_true_only_between_ready_and_shutdown() {
+    let log = Log::default();
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+    let app = runner(&log, None);
+    let readiness = app.readiness();
+    let in_service = app.readiness();
+    let app = app.service("svc", move |token| async move {
+        let running = *in_service.borrow();
+        token.cancelled().await;
+        let _ = seen_tx.send((running, *in_service.borrow()));
+        Ok(())
+    });
+    assert!(!*readiness.borrow());
+    let shutdown = tokio::time::sleep(Duration::from_millis(20));
+
+    assert_eq!(app.run_until(shutdown).await, Ok(()));
+    // The service saw `true` while running and `false` once told to stop.
+    assert_eq!(seen_rx.await.unwrap(), (true, false));
+    assert!(!*readiness.borrow());
+}
+
+#[tokio::test]
+async fn readiness_stays_false_when_startup_fails() {
+    let log = Log::default();
+    let app = runner(&log, Some("ready"));
+    let readiness = app.readiness();
+    assert!(app.run_until(std::future::pending()).await.is_err());
+    assert!(!*readiness.borrow());
+    // Never flipped: no new value since the receiver was created.
+    assert!(!readiness.borrow().has_changed());
+}

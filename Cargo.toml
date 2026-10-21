@@ -19,7 +19,7 @@ signal = ["tokio", "tokio/signal"]
 
 [dependencies]
 rustclamp-core = { version = "1.0.0", path = "../core" }
-tokio = { version = "1.53.1", optional = true, default-features = false, features = ["rt-multi-thread", "time", "macros"] }
+tokio = { version = "1.53.1", optional = true, default-features = false, features = ["rt-multi-thread", "sync", "time", "macros"] }
 
 [lints.rust]
 unsafe_code = "forbid"
