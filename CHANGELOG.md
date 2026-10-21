@@ -1,6 +1,6 @@
 # Changelog: rustclamp-runtime
 
-## Unreleased
+## 1.1.0 - 2026-10-21
 
 ### Added
 
