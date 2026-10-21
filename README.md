@@ -16,7 +16,7 @@ Rust 1.96.1+, edition 2024:
 rustclamp-runtime = "1"
 ```
 
-Enable features as needed: `features = ["tokio"]` or `["signal"]`.
+Enable features as needed: `features = ["tokio"]`, `["signal"]` or `["config"]`.
 
 ## Example
 
@@ -51,6 +51,22 @@ runner.run().await?; // returns on SIGINT/SIGTERM (feature `signal`)
 - **Signals (`signal`):** `shutdown_signal`, `wait_for_shutdown` (blocking, for sync
   apps), `TokioRuntime::wait_for_ctrl_c`, and `reload_signal` / `ReloadSignal`
   (SIGHUP, Unix).
+- **`config::Config` (`config`):** typed settings for any `serde::Deserialize`
+  type, layered process environment > `.env` > TOML (`config-toml`). Keys take
+  a prefix and nest with `__` (`APP__DB__URL` fills `db.url`). A failed load
+  returns one `ConfigError` listing every missing, invalid or unknown key,
+  never values. `Secret<T>` prints `[redacted]`; `.expose()` reads it.
+
+```rust
+use rustclamp_runtime::config::{Config, Secret};
+
+#[derive(serde::Deserialize)]
+struct Settings { port: u16, db: Db }
+#[derive(serde::Deserialize)]
+struct Db { url: Secret<String> }
+
+let settings: Settings = Config::new("APP").load()?; // APP__PORT, APP__DB__URL
+```
 
 Cancellation is cooperative: it cannot undo committed side effects, and a task
 that ignores it may outlive its join timeout.
@@ -60,6 +76,8 @@ that ignores it may outlive its join timeout.
 | default | nothing (0 external dependencies) |
 | `tokio` | Tokio adapter, `AppRunner` |
 | `signal` | `tokio` + Tokio signal handling |
+| `config` | `config` module (`serde`, no derive) |
+| `config-toml` | `config` + `Config::toml_file` (`toml`, parser only) |
 
 See [CHANGELOG.md](CHANGELOG.md).
 

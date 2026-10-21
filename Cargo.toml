@@ -16,10 +16,17 @@ readme = "README.md"
 default = []
 tokio = ["dep:tokio"]
 signal = ["tokio", "tokio/signal"]
+config = ["dep:serde"]
+config-toml = ["config", "dep:toml"]
 
 [dependencies]
 rustclamp-core = { version = "1.0.0", path = "../core" }
+serde = { version = "1.0.229", optional = true, default-features = false, features = ["std"] }
+toml = { version = "1.1.6", optional = true, default-features = false, features = ["std", "serde", "parse"] }
 tokio = { version = "1.53.1", optional = true, default-features = false, features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+[dev-dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
 
 [lints.rust]
 unsafe_code = "forbid"
